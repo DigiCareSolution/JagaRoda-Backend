@@ -1,0 +1,12 @@
+name = "jagaroda-api"
+main = "src/main.py"
+compatibility_date = "2026-10-27"
+compatibility_flags = ["python_workers"]
+
+[vars]
+SUPABASE_URL = ""
+SUPABASE_KEY = ""
+
+[[r2_buckets]]
+binding = "IMAGE_BUCKET"
+bucket_name = "jagaroda-images"
