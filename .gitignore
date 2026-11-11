@@ -9,3 +9,4 @@ python_modules/
 .dev.vars
 pylock.toml
 uv.lock
+AGENTS.md
