@@ -10,8 +10,5 @@ dependencies = [
     "dotenv"
 ]
 
-[dependency-groups]
-dev = [
-    "workers-py",
-    "workers-runtime-sdk"
-]
+[tool.vercel]
+entrypoint = "src.main:app"
