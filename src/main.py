@@ -1,39 +1,44 @@
+import os
 from typing import Any
-from fastapi import FastAPI, Request, Depends, Query, status, HTTPException
+from dotenv import load_dotenv
+from fastapi import FastAPI, Depends, Query, status, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator, AliasChoices
 from supabase import create_client, Client
-from workers import asgi
+
+load_dotenv()
 
 app = FastAPI(title="JagaRoda API", version="0.1.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 security = HTTPBearer(auto_error=False)
 
-_supabase_client_cache: dict[tuple[str, str], Client] = {}
+_supabase_client: Client | None = None
 
 
-def get_supabase(request: Request) -> Client:
-    env = request.scope.get("env")
-    if env is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Environment variables tidak ditemukan pada worker scope"
-        )
+def get_supabase() -> Client:
+    global _supabase_client
+    if _supabase_client is None:
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_KEY")
 
-    supabase_url = getattr(env, "SUPABASE_URL", None) or (env.get("SUPABASE_URL") if hasattr(env, "get") else None)
-    supabase_key = getattr(env, "SUPABASE_KEY", None) or (env.get("SUPABASE_KEY") if hasattr(env, "get") else None)
+        if not supabase_url or not supabase_key:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="SUPABASE_URL atau SUPABASE_KEY belum dikonfigurasi"
+            )
 
-    if not supabase_url or not supabase_key:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="SUPABASE_URL atau SUPABASE_KEY belum dikonfigurasi"
-        )
+        _supabase_client = create_client(supabase_url, supabase_key)
 
-    cache_key = (str(supabase_url), str(supabase_key))
-    if cache_key not in _supabase_client_cache:
-        _supabase_client_cache[cache_key] = create_client(str(supabase_url), str(supabase_key))
-
-    return _supabase_client_cache[cache_key]
+    return _supabase_client
 
 
 class UserCreate(BaseModel):
@@ -387,6 +392,3 @@ async def count_numbers():
     angka1 = 5
     angka2 = 10
     return {"hasil": angka1 + angka2}
-
-
-Default = asgi.entrypoint(app)
