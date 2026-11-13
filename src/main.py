@@ -392,3 +392,31 @@ async def count_numbers():
     angka1 = 5
     angka2 = 10
     return {"hasil": angka1 + angka2}
+
+
+Default = asgi.entrypoint(app)
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy"
+    }
+
+
+@app.get("/health/supabase")
+async def supabase_health(
+    supabase: Client = Depends(get_supabase)
+):
+    try:
+        supabase.table("users").select("user_id").limit(1).execute()
+
+        return {
+            "status": "healthy",
+            "database": "connected"
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Supabase connection failed: {str(e)}"
+        )
