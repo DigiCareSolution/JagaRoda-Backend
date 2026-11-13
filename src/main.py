@@ -41,6 +41,20 @@ def get_supabase() -> Client:
     return _supabase_client
 
 
+class UserLogin(BaseModel):
+    email: str = Field(
+        min_length=5,
+        max_length=255,
+        pattern=r"^[^\@\s]+@[^\@\s]+\.[^\@\s]+$",
+        description="Alamat email"
+    )
+    password: str = Field(
+        min_length=8,
+        max_length=128,
+        description="Password akun"
+    )
+
+
 class UserCreate(BaseModel):
     email: str = Field(
         min_length=5,
@@ -58,9 +72,9 @@ class UserCreate(BaseModel):
         max_length=50,
         description="Username akun staf"
     )
-    phone: int | None = Field(
+    phone: str | None = Field(
         default=None,
-        description="Nomor telepon dalam bentuk integer",
+        description="Nomor telepon",
         validation_alias=AliasChoices("phone", "phone_number", "no_hp")
     )
 
@@ -72,11 +86,9 @@ class UserCreate(BaseModel):
     @field_validator("phone", mode="before")
     @classmethod
     def sanitize_phone(cls, v: Any) -> Any:
-        if v is None or v == "":
-            return None
         if isinstance(v, str):
-            cleaned = v.strip().replace("+", "").replace("-", "").replace(" ", "")
-            return int(cleaned) if cleaned else None
+            stripped = v.strip()
+            return stripped if stripped else None
         return v
 
 
@@ -97,9 +109,9 @@ class UserRegister(BaseModel):
         max_length=50,
         description="Username akun"
     )
-    phone: int | None = Field(
+    phone: str | None = Field(
         default=None,
-        description="Nomor telepon dalam bentuk integer",
+        description="Nomor telepon",
         validation_alias=AliasChoices("phone", "phone_number", "no_hp")
     )
     role: str = Field(
@@ -115,11 +127,9 @@ class UserRegister(BaseModel):
     @field_validator("phone", mode="before")
     @classmethod
     def sanitize_phone(cls, v: Any) -> Any:
-        if v is None or v == "":
-            return None
         if isinstance(v, str):
-            cleaned = v.strip().replace("+", "").replace("-", "").replace(" ", "")
-            return int(cleaned) if cleaned else None
+            stripped = v.strip()
+            return stripped if stripped else None
         return v
 
     @field_validator("role")
@@ -179,6 +189,116 @@ def require_admin(
         )
 
     return supabase, str(auth_user.id)
+
+
+def require_auth(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    supabase: Client = Depends(get_supabase),
+) -> tuple[Client, str]:
+    if not credentials or not credentials.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization header wajib diisi dengan format Bearer <token>"
+        )
+
+    token = credentials.credentials
+
+    try:
+        auth_response = supabase.auth.get_user(token)
+        auth_user = auth_response.user
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Access token tidak valid atau kedaluwarsa"
+        )
+
+    if not auth_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User tidak ditemukan"
+        )
+
+    return supabase, str(auth_user.id)
+
+
+@app.post("/login")
+async def login(
+    credentials: UserLogin,
+    supabase: Client = Depends(get_supabase),
+):
+    try:
+        response = supabase.auth.sign_in_with_password({
+            "email": credentials.email,
+            "password": credentials.password,
+        })
+
+        if not response or not response.user or not response.session:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Email atau password salah"
+            )
+
+        profile = (
+            supabase.table("users")
+            .select("user_id, username, role, phone, created_at")
+            .eq("user_id", str(response.user.id))
+            .limit(1)
+            .execute()
+        )
+
+        return {
+            "status": "success",
+            "message": "Login berhasil",
+            "data": {
+                "access_token": response.session.access_token,
+                "refresh_token": response.session.refresh_token,
+                "token_type": "bearer",
+                "user": profile.data[0] if profile.data else {"user_id": str(response.user.id)}
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e)
+        )
+
+
+@app.get("/user/me")
+async def get_current_user(
+    auth_context: tuple[Client, str] = Depends(require_auth),
+):
+    supabase, user_id = auth_context
+
+    try:
+        response = (
+            supabase.table("users")
+            .select("user_id, username, role, phone, created_at")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Profil user tidak ditemukan"
+            )
+
+        return {
+            "status": "success",
+            "data": response.data[0]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal mengambil data user: {e}"
+        )
 
 
 @app.get("/user")

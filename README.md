@@ -139,7 +139,83 @@ Simple arithmetic verification endpoint to test function execution.
 
 ---
 
-### 2. User Management
+### 2. Authentication
+
+#### `POST /login`
+Authenticates a user with email and password and returns a session token pair.
+
+- **Access Level:** Public
+- **Headers:**
+  ```http
+  Content-Type: application/json
+  ```
+
+- **Request Body:**
+  ```json
+  {
+    "email": "user@example.com",
+    "password": "StrongPassword123!"
+  }
+  ```
+
+- **Field Constraints:**
+  - `email`: Valid email format (min: 5, max: 255 characters).
+  - `password`: Minimum 8 characters, maximum 128 characters.
+
+- **Response `200 OK`:**
+  ```json
+  {
+    "status": "success",
+    "message": "Login berhasil",
+    "data": {
+      "access_token": "<jwt_access_token>",
+      "refresh_token": "<jwt_refresh_token>",
+      "token_type": "bearer",
+      "user": {
+        "user_id": "c1f7a3f8-8c01-44ab-9921-123456789abc",
+        "username": "johndoe",
+        "role": "Staff",
+        "phone": "081234567890",
+        "created_at": "2026-11-10T08:30:00+00:00"
+      }
+    }
+  }
+  ```
+
+- **Error Responses:**
+  - `401 Unauthorized`: Invalid email or password.
+  - `422 Unprocessable Entity`: Validation error (e.g. invalid email format).
+
+---
+
+### 3. User Management
+
+#### `GET /user/me`
+Returns the authenticated user's own profile.
+
+- **Access Level:** Authenticated users (any role)
+- **Headers:**
+  ```http
+  Authorization: Bearer <access_token>
+  ```
+
+- **Response `200 OK`:**
+  ```json
+  {
+    "status": "success",
+    "data": {
+      "user_id": "c1f7a3f8-8c01-44ab-9921-123456789abc",
+      "username": "johndoe",
+      "role": "Staff",
+      "phone": "081234567890",
+      "created_at": "2026-11-10T08:30:00+00:00"
+    }
+  }
+  ```
+
+- **Error Responses:**
+  - `401 Unauthorized`: Missing or expired Bearer token.
+  - `404 Not Found`: Profile not found in the database.
 
 #### `GET /user`
 Fetches a list of registered users sorted by newest first with pagination.
@@ -159,7 +235,7 @@ Fetches a list of registered users sorted by newest first with pagination.
         "user_id": "c1f7a3f8-8c01-44ab-9921-123456789abc",
         "username": "johndoe",
         "role": "Staff",
-        "phone": 81234567890,
+        "phone": "081234567890",
         "created_at": "2026-11-10T08:30:00+00:00"
       }
     ]
@@ -180,7 +256,7 @@ Fetches the profile of a single user by their unique UUID.
       "user_id": "c1f7a3f8-8c01-44ab-9921-123456789abc",
       "username": "johndoe",
       "role": "Staff",
-      "phone": 81234567890,
+      "phone": "081234567890",
       "created_at": "2026-11-10T08:30:00+00:00"
     }
   }
@@ -208,7 +284,7 @@ Self-registration endpoint for new users.
     "email": "user@example.com",
     "password": "StrongPassword123!",
     "username": "newuser",
-    "phone": 81234567890,
+    "phone": "081234567890",
     "role": "Staff"
   }
   ```
@@ -217,7 +293,7 @@ Self-registration endpoint for new users.
   - `email`: Valid email format (min: 5, max: 255 characters).
   - `password`: Minimum 8 characters, maximum 128 characters.
   - `username`: Minimum 1 character, maximum 50 characters.
-  - `phone`: Optional (`integer`). Aliases accepted: `phone_number`, `no_hp`.
+  - `phone`: Optional (`varchar/string`). Aliases accepted: `phone_number`, `no_hp`.
   - `role`: Optional (default: `"Staff"`). Registering with role `"Admin"` is strictly forbidden.
 
 - **Response `201 Created`:**
@@ -229,7 +305,7 @@ Self-registration endpoint for new users.
       "user_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
       "username": "newuser",
       "role": "Staff",
-      "phone": 81234567890,
+      "phone": "081234567890",
       "created_at": "2026-11-13T08:00:00+00:00"
     }
   }
@@ -255,7 +331,7 @@ Creates a new `Staff` user account in Supabase Auth and inserts the correspondin
     "email": "staff.member@example.com",
     "password": "StrongPassword123!",
     "username": "staffmember",
-    "phone": 81234567890
+    "phone": "081234567890"
   }
   ```
 
@@ -263,7 +339,7 @@ Creates a new `Staff` user account in Supabase Auth and inserts the correspondin
   - `email`: Valid email format (min: 5, max: 255 characters).
   - `password`: Minimum 8 characters, maximum 128 characters.
   - `username`: Minimum 1 character, maximum 50 characters.
-  - `phone`: Optional (`integer`). Aliases accepted: `phone_number`, `no_hp`.
+  - `phone`: Optional (`varchar/string`). Aliases accepted: `phone_number`, `no_hp`.
 
 - **Response `201 Created`:**
   ```json
@@ -274,7 +350,7 @@ Creates a new `Staff` user account in Supabase Auth and inserts the correspondin
       "user_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
       "username": "staffmember",
       "role": "Staff",
-      "phone": 81234567890,
+      "phone": "081234567890",
       "created_at": "2026-11-11T06:45:00+00:00"
     }
   }
