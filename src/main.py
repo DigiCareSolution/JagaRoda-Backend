@@ -367,24 +367,8 @@ async def add_user(
 
 
 @app.get("/")
-async def test_connection(supabase: Client = Depends(get_supabase)):
-    try:
-        try:
-            supabase.table("dummy_test_table").select("*").limit(1).execute()
-        except Exception as db_error:
-            error_message = str(db_error)
-
-            if "PGRST205" in error_message:
-                return {
-                    "status": "success",
-                    "message": "Connected to Supabase successfully! API keys and URL are working perfectly."
-                }
-            raise db_error
-
-        return {"status": "success"}
-
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+def root():
+    return {"status": "ok", "service": "jaga-roda-backend"}
 
 
 @app.get("/count")
