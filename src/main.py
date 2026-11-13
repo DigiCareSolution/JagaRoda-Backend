@@ -394,9 +394,6 @@ async def count_numbers():
     return {"hasil": angka1 + angka2}
 
 
-Default = asgi.entrypoint(app)
-
-
 @app.get("/health")
 async def health():
     return {
