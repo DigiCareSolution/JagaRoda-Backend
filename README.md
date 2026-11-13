@@ -156,6 +156,7 @@ Fetches a list of registered users sorted by newest first with pagination.
         "user_id": "c1f7a3f8-8c01-44ab-9921-123456789abc",
         "username": "johndoe",
         "role": "Staff",
+        "phone": 81234567890,
         "created_at": "2026-11-10T08:30:00+00:00"
       }
     ]
@@ -176,6 +177,7 @@ Fetches the profile of a single user by their unique UUID.
       "user_id": "c1f7a3f8-8c01-44ab-9921-123456789abc",
       "username": "johndoe",
       "role": "Staff",
+      "phone": 81234567890,
       "created_at": "2026-11-10T08:30:00+00:00"
     }
   }
@@ -187,6 +189,52 @@ Fetches the profile of a single user by their unique UUID.
     "detail": "User not found"
   }
   ```
+
+#### `POST /register` (alias: `POST /user/register`)
+Self-registration endpoint for new users.
+
+- **Access Level:** **Public** (No authentication required)
+- **Headers:**
+  ```http
+  Content-Type: application/json
+  ```
+
+- **Request Body:**
+  ```json
+  {
+    "email": "user@example.com",
+    "password": "StrongPassword123!",
+    "username": "newuser",
+    "phone": 81234567890,
+    "role": "Staff"
+  }
+  ```
+
+- **Field Constraints:**
+  - `email`: Valid email format (min: 5, max: 255 characters).
+  - `password`: Minimum 8 characters, maximum 128 characters.
+  - `username`: Minimum 1 character, maximum 50 characters.
+  - `phone`: Optional (`integer`). Aliases accepted: `phone_number`, `no_hp`.
+  - `role`: Optional (default: `"Staff"`). Registering with role `"Admin"` is strictly forbidden.
+
+- **Response `201 Created`:**
+  ```json
+  {
+    "status": "success",
+    "message": "Registrasi berhasil",
+    "data": {
+      "user_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "username": "newuser",
+      "role": "Staff",
+      "phone": 81234567890,
+      "created_at": "2026-11-13T08:00:00+00:00"
+    }
+  }
+  ```
+
+- **Error Responses:**
+  - `400 Bad Request`: Email already registered, duplicate username, or failed database insertion.
+  - `422 Unprocessable Entity`: Validation error (e.g. invalid email format, short password, or passing `Admin` as role).
 
 #### `POST /user/add`
 Creates a new `Staff` user account in Supabase Auth and inserts the corresponding profile into `public.users`.
@@ -203,7 +251,8 @@ Creates a new `Staff` user account in Supabase Auth and inserts the correspondin
   {
     "email": "staff.member@example.com",
     "password": "StrongPassword123!",
-    "username": "staffmember"
+    "username": "staffmember",
+    "phone": 81234567890
   }
   ```
 
@@ -211,6 +260,7 @@ Creates a new `Staff` user account in Supabase Auth and inserts the correspondin
   - `email`: Valid email format (min: 5, max: 255 characters).
   - `password`: Minimum 8 characters, maximum 128 characters.
   - `username`: Minimum 1 character, maximum 50 characters.
+  - `phone`: Optional (`integer`). Aliases accepted: `phone_number`, `no_hp`.
 
 - **Response `201 Created`:**
   ```json
@@ -221,6 +271,7 @@ Creates a new `Staff` user account in Supabase Auth and inserts the correspondin
       "user_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
       "username": "staffmember",
       "role": "Staff",
+      "phone": 81234567890,
       "created_at": "2026-11-11T06:45:00+00:00"
     }
   }

@@ -1,7 +1,7 @@
 from typing import Any
 from fastapi import FastAPI, Request, Depends, Query, status, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, AliasChoices
 from supabase import create_client, Client
 from workers import asgi
 
@@ -53,11 +53,77 @@ class UserCreate(BaseModel):
         max_length=50,
         description="Username akun staf"
     )
+    phone: int | None = Field(
+        default=None,
+        description="Nomor telepon dalam bentuk integer",
+        validation_alias=AliasChoices("phone", "phone_number", "no_hp")
+    )
 
     @field_validator("username", "email", mode="before")
     @classmethod
     def strip_whitespace(cls, v: Any) -> Any:
         return v.strip() if isinstance(v, str) else v
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def sanitize_phone(cls, v: Any) -> Any:
+        if v is None or v == "":
+            return None
+        if isinstance(v, str):
+            cleaned = v.strip().replace("+", "").replace("-", "").replace(" ", "")
+            return int(cleaned) if cleaned else None
+        return v
+
+
+class UserRegister(BaseModel):
+    email: str = Field(
+        min_length=5,
+        max_length=255,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+        description="Alamat email valid"
+    )
+    password: str = Field(
+        min_length=8,
+        max_length=128,
+        description="Password minimal 8 karakter"
+    )
+    username: str = Field(
+        min_length=1,
+        max_length=50,
+        description="Username akun"
+    )
+    phone: int | None = Field(
+        default=None,
+        description="Nomor telepon dalam bentuk integer",
+        validation_alias=AliasChoices("phone", "phone_number", "no_hp")
+    )
+    role: str = Field(
+        default="Staff",
+        description="Role akun pengguna"
+    )
+
+    @field_validator("username", "email", mode="before")
+    @classmethod
+    def strip_whitespace(cls, v: Any) -> Any:
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def sanitize_phone(cls, v: Any) -> Any:
+        if v is None or v == "":
+            return None
+        if isinstance(v, str):
+            cleaned = v.strip().replace("+", "").replace("-", "").replace(" ", "")
+            return int(cleaned) if cleaned else None
+        return v
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, v: str) -> str:
+        cleaned = v.strip().capitalize()
+        if cleaned == "Admin":
+            raise ValueError("Registrasi akun dengan role Admin tidak diizinkan")
+        return cleaned
 
 
 def require_admin(
@@ -120,7 +186,7 @@ async def get_users(
         response = (
             supabase
             .table("users")
-            .select("user_id, username, role, created_at")
+            .select("user_id, username, role, phone, created_at")
             .order("created_at", desc=True)
             .range(offset, offset + limit - 1)
             .execute()
@@ -149,7 +215,7 @@ async def get_user_by_id(
         response = (
             supabase
             .table("users")
-            .select("user_id, username, role, created_at")
+            .select("user_id, username, role, phone, created_at")
             .eq("user_id", user_id)
             .limit(1)
             .execute()
@@ -172,6 +238,66 @@ async def get_user_by_id(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Gagal mengambil data user: {e}"
+        )
+
+
+@app.post("/register", status_code=status.HTTP_201_CREATED)
+@app.post("/user/register", status_code=status.HTTP_201_CREATED)
+async def register_user(
+    user: UserRegister,
+    supabase: Client = Depends(get_supabase),
+):
+    new_user_id = None
+
+    try:
+        response = supabase.auth.admin.create_user({
+            "email": user.email,
+            "password": user.password,
+            "email_confirm": True
+        })
+
+        if not response or not response.user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Gagal membuat akun authentication di Supabase"
+            )
+
+        new_user_id = response.user.id
+
+        profile_payload = {
+            "user_id": str(new_user_id),
+            "username": user.username,
+            "role": user.role,
+            "phone": user.phone
+        }
+
+        profile = (
+            supabase.table("users")
+            .insert(profile_payload)
+            .execute()
+        )
+
+        created_data = profile.data[0] if profile.data else profile_payload
+
+        return {
+            "status": "success",
+            "message": "Registrasi berhasil",
+            "data": created_data
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        if supabase and new_user_id:
+            try:
+                supabase.auth.admin.delete_user(str(new_user_id))
+            except Exception:
+                pass
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
         )
 
 
@@ -198,21 +324,20 @@ async def add_user(
 
         new_user_id = response.user.id
 
+        profile_payload = {
+            "user_id": str(new_user_id),
+            "username": user.username,
+            "role": "Staff",
+            "phone": user.phone
+        }
+
         profile = (
             supabase.table("users")
-            .insert({
-                "user_id": str(new_user_id),
-                "username": user.username,
-                "role": "Staff"
-            })
+            .insert(profile_payload)
             .execute()
         )
 
-        created_data = profile.data[0] if profile.data else {
-            "user_id": str(new_user_id),
-            "username": user.username,
-            "role": "Staff"
-        }
+        created_data = profile.data[0] if profile.data else profile_payload
 
         return {
             "status": "success",
