@@ -1,24 +1,24 @@
 # JagaRoda API
 
-JagaRoda API is a serverless backend service built with **FastAPI** running on **Cloudflare Workers** (using Python Workers via WebAssembly/Pyodide). It integrates with **Supabase** for PostgreSQL database management and user authentication, and connects to **Cloudflare R2** for object storage.
+JagaRoda API is a serverless backend service built with **FastAPI** deployed on **Vercel Serverless Functions**. It integrates with **Supabase** for PostgreSQL database management and user authentication, providing secure REST endpoints with role-based access control (RBAC).
 
 ---
 
 ## Architecture & Tech Stack
 
 - **Framework:** [FastAPI](https://fastapi.tiangolo.com/) (Python)
-- **Runtime:** [Cloudflare Python Workers](https://developers.cloudflare.com/workers/languages/python/) (Pyodide / WASM ASGI entrypoint via `workers.asgi`)
-- **Database & Auth:** [Supabase](https://supabase.com/) (PostgreSQL & Supabase Auth GoTrue)
-- **Object Storage:** [Cloudflare R2](https://developers.cloudflare.com/r2/) (S3-compatible storage via bucket binding)
-- **Deployment:** [Wrangler](https://developers.cloudflare.com/workers/wrangler/) / `pywrangler` via GitHub Actions CI/CD
+- **Deployment Platform:** [Vercel](https://vercel.com/) (Serverless Functions via `@vercel/python`)
+- **Serverless Entrypoint:** `api/index.py` via `vercel.json` rewrites
+- **Database & Auth:** [Supabase](https://supabase.com/) (PostgreSQL & Supabase GoTrue Auth)
+- **CORS:** Enabled for cross-origin browser & mobile client access
 
 ---
 
 ## Features
 
-- **Serverless Edge Performance:** Runs globally on Cloudflare's edge network with near-zero cold start latency.
-- **Supabase Client Caching:** In-memory client caching per worker isolate to eliminate redundant client initialization across warm requests.
+- **Serverless Edge Performance:** Runs on Vercel Serverless Functions with automatic scaling and zero server maintenance.
 - **Role-Based Access Control (RBAC):** Admin-guarded endpoints validated through Supabase Bearer token verification and database role validation.
+- **Self-Registration & Admin Creation:** Dedicated endpoints for user self-registration (`/register`) and admin-managed staff creation (`/user/add`).
 - **Transactional Rollback:** Safeguards user creation by rolling back Supabase Auth accounts if the accompanying database profile insertion fails.
 - **Pagination & Query Optimization:** Paginated user queries with indexed sorting and `.limit(1)` optimization for single-row lookups.
 - **Interactive OpenAPI Documentation:** Fully documented Swagger UI (`/docs`) and ReDoc (`/redoc`) with built-in Bearer authentication support.
@@ -31,12 +31,17 @@ JagaRoda API is a serverless backend service built with **FastAPI** running on *
 JagaRoda-Backend/
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml        # GitHub Actions automated deployment workflow
+│       └── deploy.yml        # GitHub Actions CI workflow
+├── api/
+│   └── index.py              # Vercel serverless entrypoint
 ├── src/
-│   └── main.py               # Main FastAPI application & Cloudflare Worker entrypoint
-├── .dev.vars                 # Local environment secrets (not committed to git)
-├── pyproject.toml            # Python dependencies and project configuration
-├── wrangler.toml             # Cloudflare Workers configuration & R2 bindings
+│   └── main.py               # Main FastAPI application and route controllers
+├── .env.example              # Environment variables template
+├── .env                      # Local environment secrets (not committed to git)
+├── vercel.json               # Vercel routing and rewrite configuration
+├── requirements.txt          # Python dependencies for Vercel build
+├── pyproject.toml            # Project metadata and package configuration
+├── AGENTS.md                 # Antigravity agent workspace rules
 └── README.md                 # Project documentation
 ```
 
@@ -45,39 +50,29 @@ JagaRoda-Backend/
 ## Prerequisites
 
 Ensure the following tools are installed on your machine:
-- **Python:** 3.12 or newer
-- **Node.js:** v18 or newer (required for the Wrangler CLI)
-- **Package Manager:** `pip` or `uv`
+- **Python:** 3.11 or newer
+- **pip** or **uv**
+- Optional: **Vercel CLI** (`npm i -g vercel`)
 
 ---
 
 ## Configuration & Environment Variables
 
-Cloudflare Workers use `.dev.vars` for local development secrets and Cloudflare Dashboard / GitHub Secrets for production.
+Copy `.env.example` to `.env` in the root directory for local development:
 
-Create a `.dev.vars` file in the root directory:
+```bash
+cp .env.example .env
+```
+
+Set the following variables:
 
 ```ini
 SUPABASE_URL="https://your-project-ref.supabase.co"
 SUPABASE_KEY="your-supabase-service-role-secret-key"
+PORT=8000
 ```
 
 > **Note:** `SUPABASE_KEY` must be the Supabase **Service Role Key** (secret) to perform administrative operations such as `supabase.auth.admin.create_user` and `delete_user`.
-
-### Wrangler Configuration (`wrangler.toml`)
-
-The Worker binding is configured in `wrangler.toml`:
-
-```toml
-name = "jagaroda-api"
-main = "src/main.py"
-compatibility_date = "2026-10-27"
-compatibility_flags = ["python_workers"]
-
-[[r2_buckets]]
-binding = "IMAGE_BUCKET"
-bucket_name = "jagaroda-images"
-```
 
 ---
 
@@ -89,23 +84,31 @@ bucket_name = "jagaroda-images"
    cd JagaRoda-Backend
    ```
 
-2. **Install tools & dependencies:**
+2. **Create and activate a virtual environment:**
    ```bash
-   pip install uv
-   pip install workers-py
+   python3 -m venv .venv
+   source .venv/bin/activate
    ```
 
-3. **Start the local development server:**
+3. **Install dependencies:**
    ```bash
-   npx wrangler dev
-   # or
-   pywrangler dev
+   pip install -r requirements.txt
+   ```
+
+4. **Start the local server with auto-reload:**
+   ```bash
+   uvicorn src.main:app --reload --port 8000
    ```
 
    The server will start locally at:
-   - **Base URL:** `http://localhost:8787`
-   - **Interactive Swagger Docs:** `http://localhost:8787/docs`
-   - **ReDoc Documentation:** `http://localhost:8787/redoc`
+   - **Base URL:** `http://localhost:8000`
+   - **Interactive Swagger Docs:** `http://localhost:8000/docs`
+   - **ReDoc Documentation:** `http://localhost:8000/redoc`
+
+   Alternatively, you can run the Vercel local environment:
+   ```bash
+   vercel dev
+   ```
 
 ---
 
@@ -125,7 +128,7 @@ Tests connectivity with Supabase by querying the database.
   ```
 
 #### `GET /count`
-Simple arithmetic verification endpoint to test worker execution.
+Simple arithmetic verification endpoint to test function execution.
 
 - **Response `200 OK`:**
   ```json
@@ -277,49 +280,44 @@ Creates a new `Staff` user account in Supabase Auth and inserts the correspondin
   }
   ```
 
-- **Error Responses:**
-  - `401 Unauthorized`: Missing or expired Bearer token.
-  - `403 Forbidden`: Authenticated user does not possess the `Admin` role.
-  - `400 Bad Request`: Email already registered or invalid input payload.
+---
+
+## Deployment to Vercel
+
+### Option A: Via Vercel Web Dashboard (Recommended)
+
+1. **Push your code to GitHub:**
+   ```bash
+   git add .
+   git commit -m "Configure deployment for Vercel"
+   git push origin main
+   ```
+2. **Go to [vercel.com](https://vercel.com/)** and log in.
+3. Click **"Add New..."** > **"Project"**.
+4. Import your **`JagaRoda-Backend`** repository.
+5. In the **Environment Variables** section, add:
+   - `SUPABASE_URL` = `https://your-project-ref.supabase.co`
+   - `SUPABASE_KEY` = `your-supabase-service-role-key`
+6. Click **Deploy**. Vercel will install dependencies from `requirements.txt` and deploy your FastAPI endpoints.
 
 ---
 
-## Authentication & Authorization Lifecycle
+### Option B: Via Vercel CLI
 
-```
-Client Request (Bearer Token)
-       │
-       ▼
-[require_admin Dependency]
-       │
-       ├─► 1. Verify JWT via Supabase Auth (supabase.auth.get_user)
-       │      └─► Fail: 401 Unauthorized
-       │
-       ├─► 2. Check Role in public.users table (role == "Admin")
-       │      └─► Fail: 403 Forbidden
-       │
-       ▼
-[add_user Controller]
-       │
-       ├─► 1. Create Auth User in Supabase (supabase.auth.admin.create_user)
-       │
-       ├─► 2. Insert Profile into public.users (role = "Staff")
-       │
-       └─► On Profile Failure ──► Rollback: Delete Auth User (delete_user)
-```
-
----
-
-## Deployment
-
-Continuous Deployment is managed via **GitHub Actions** (`.github/workflows/deploy.yml`).
-
-Every push to the `main` branch automatically triggers deployment:
-1. Sets up the Python runtime.
-2. Installs `uv` and `workers-py`.
-3. Deploys using `pywrangler deploy` to Cloudflare Workers.
-
-### Required GitHub Secrets:
-Add the following repository secrets under **Settings > Secrets and variables > Actions**:
-- `CLOUDFLARE_API_TOKEN`: Cloudflare API Token with Workers edit permissions.
-- `CLOUDFLARE_ACCOUNT_ID`: Cloudflare Account ID.
+1. **Install Vercel CLI:**
+   ```bash
+   npm i -g vercel
+   ```
+2. **Log in and deploy:**
+   ```bash
+   vercel
+   ```
+3. **Add environment variables to Vercel:**
+   ```bash
+   vercel env add SUPABASE_URL
+   vercel env add SUPABASE_KEY
+   ```
+4. **Deploy to production:**
+   ```bash
+   vercel --prod
+   ```
