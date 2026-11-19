@@ -1,7 +1,9 @@
 import os
+import uuid
 from typing import Any
+from urllib.parse import urlparse
 from dotenv import load_dotenv
-from fastapi import FastAPI, Depends, Query, status, HTTPException
+from fastapi import FastAPI, Depends, Query, status, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator, AliasChoices
@@ -22,6 +24,7 @@ app.add_middleware(
 security = HTTPBearer(auto_error=False)
 
 _supabase_client: Client | None = None
+_r2_client = None
 
 
 def get_supabase() -> Client:
@@ -39,6 +42,72 @@ def get_supabase() -> Client:
         _supabase_client = create_client(supabase_url, supabase_key)
 
     return _supabase_client
+
+
+def get_r2_bucket_name() -> str:
+    return os.getenv("R2_BUCKET_NAME", "jagaroda-images")
+
+
+def get_r2_client():
+    global _r2_client
+    if _r2_client is not None:
+        return _r2_client
+
+    r2_account_id = os.getenv("R2_ACCOUNT_ID")
+    r2_access_key_id = os.getenv("R2_ACCESS_KEY_ID")
+    r2_secret_access_key = os.getenv("R2_SECRET_ACCESS_KEY")
+    r2_endpoint_url = os.getenv("R2_ENDPOINT_URL")
+
+    if not r2_endpoint_url and r2_account_id:
+        r2_endpoint_url = f"https://{r2_account_id}.r2.cloudflarestorage.com"
+
+    if not r2_endpoint_url or not r2_access_key_id or not r2_secret_access_key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Konfigurasi Cloudflare R2 belum lengkap (R2_ACCOUNT_ID/R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)"
+        )
+
+    try:
+        import boto3
+        from botocore.config import Config
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Package boto3 belum terinstall"
+        )
+
+    _r2_client = boto3.client(
+        service_name="s3",
+        endpoint_url=r2_endpoint_url,
+        aws_access_key_id=r2_access_key_id,
+        aws_secret_access_key=r2_secret_access_key,
+        region_name="auto",
+        config=Config(s3={"addressing_style": "path"})
+    )
+    return _r2_client
+
+
+def build_r2_public_url(object_key: str) -> str:
+    r2_public_url = os.getenv("R2_PUBLIC_URL")
+    if r2_public_url:
+        return f"{r2_public_url.rstrip('/')}/{object_key.lstrip('/')}"
+
+    r2_account_id = os.getenv("R2_ACCOUNT_ID")
+    bucket_name = get_r2_bucket_name()
+    if r2_account_id:
+        return f"https://{bucket_name}.{r2_account_id}.r2.cloudflarestorage.com/{object_key.lstrip('/')}"
+
+    endpoint_url = os.getenv("R2_ENDPOINT_URL", "").rstrip("/")
+    return f"{endpoint_url}/{bucket_name}/{object_key.lstrip('/')}"
+
+
+def extract_r2_object_key(photo_url: str) -> str:
+    parsed = urlparse(photo_url)
+    path = parsed.path.lstrip("/")
+    bucket_name = get_r2_bucket_name()
+    if path.startswith(f"{bucket_name}/"):
+        return path[len(bucket_name) + 1:]
+    return path
 
 
 class UserLogin(BaseModel):
@@ -139,6 +208,154 @@ class UserRegister(BaseModel):
         if cleaned == "Admin":
             raise ValueError("Registrasi akun dengan role Admin tidak diizinkan")
         return cleaned
+
+
+class VehicleCreate(BaseModel):
+    plat_nomor: str = Field(
+        min_length=3,
+        max_length=20,
+        description="Nomor plat kendaraan"
+    )
+    merk: str = Field(
+        min_length=1,
+        max_length=50,
+        description="Merk kendaraan"
+    )
+    tipe: str = Field(
+        min_length=1,
+        max_length=50,
+        description="Tipe kendaraan"
+    )
+    tahun: int | None = Field(
+        default=None,
+        ge=1900,
+        le=2100,
+        description="Tahun pembuatan kendaraan"
+    )
+    warna: str | None = Field(
+        default=None,
+        max_length=30,
+        description="Warna kendaraan"
+    )
+    nomor_stnk: str | None = Field(
+        default=None,
+        max_length=50,
+        description="Nomor STNK kendaraan"
+    )
+    tarif_per_hari: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Tarif sewa per hari"
+    )
+    status: str = Field(
+        default="Available",
+        description="Status kendaraan"
+    )
+    deskripsi: str | None = Field(
+        default=None,
+        description="Deskripsi kendaraan"
+    )
+
+    @field_validator("plat_nomor", mode="before")
+    @classmethod
+    def format_plat_nomor(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return " ".join(v.strip().upper().split())
+        return v
+
+    @field_validator("merk", "tipe", "warna", "nomor_stnk", "deskripsi", mode="before")
+    @classmethod
+    def strip_text(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped if stripped else None
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        valid_statuses = {"Available", "Rented", "In Maintenance"}
+        for s in valid_statuses:
+            if s.lower() == v.strip().lower():
+                return s
+        raise ValueError("Status harus salah satu dari: Available, Rented, In Maintenance")
+
+
+class VehicleUpdate(BaseModel):
+    plat_nomor: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=20,
+        description="Nomor plat kendaraan"
+    )
+    merk: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=50,
+        description="Merk kendaraan"
+    )
+    tipe: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=50,
+        description="Tipe kendaraan"
+    )
+    tahun: int | None = Field(
+        default=None,
+        ge=1900,
+        le=2100,
+        description="Tahun pembuatan kendaraan"
+    )
+    warna: str | None = Field(
+        default=None,
+        max_length=30,
+        description="Warna kendaraan"
+    )
+    nomor_stnk: str | None = Field(
+        default=None,
+        max_length=50,
+        description="Nomor STNK kendaraan"
+    )
+    tarif_per_hari: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Tarif sewa per hari"
+    )
+    status: str | None = Field(
+        default=None,
+        description="Status kendaraan"
+    )
+    deskripsi: str | None = Field(
+        default=None,
+        description="Deskripsi kendaraan"
+    )
+
+    @field_validator("plat_nomor", mode="before")
+    @classmethod
+    def format_plat_nomor(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            cleaned = " ".join(v.strip().upper().split())
+            return cleaned if cleaned else None
+        return v
+
+    @field_validator("merk", "tipe", "warna", "nomor_stnk", "deskripsi", mode="before")
+    @classmethod
+    def strip_text(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped if stripped else None
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        valid_statuses = {"Available", "Rented", "In Maintenance"}
+        for s in valid_statuses:
+            if s.lower() == v.strip().lower():
+                return s
+        raise ValueError("Status harus salah satu dari: Available, Rented, In Maintenance")
 
 
 def require_admin(
@@ -484,6 +701,390 @@ async def add_user(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+
+
+@app.get("/vehicle")
+@app.get("/vehicles")
+async def get_vehicles(
+    limit: int = Query(default=50, ge=1, le=100, description="Maksimum jumlah data yang diambil"),
+    offset: int = Query(default=0, ge=0, description="Offset paginasi"),
+    vehicle_status: str | None = Query(default=None, alias="status", description="Filter status kendaraan"),
+    search: str | None = Query(default=None, description="Pencarian plat nomor, merk, atau tipe"),
+    supabase: Client = Depends(get_supabase),
+):
+    try:
+        query = (
+            supabase
+            .table("vehicles")
+            .select("*, vehicle_photos(*)")
+            .order("created_at", desc=True)
+        )
+
+        if vehicle_status:
+            query = query.eq("status", vehicle_status)
+
+        if search:
+            search_clean = search.strip()
+            query = query.or_(f"plat_nomor.ilike.%{search_clean}%,merk.ilike.%{search_clean}%,tipe.ilike.%{search_clean}%")
+
+        response = query.range(offset, offset + limit - 1).execute()
+
+        return {
+            "status": "success",
+            "data": response.data or []
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal mengambil data kendaraan: {e}"
+        )
+
+
+@app.get("/vehicle/{vehicle_id}")
+@app.get("/vehicles/{vehicle_id}")
+async def get_vehicle_by_id(
+    vehicle_id: int,
+    supabase: Client = Depends(get_supabase),
+):
+    try:
+        response = (
+            supabase
+            .table("vehicles")
+            .select("*, vehicle_photos(*)")
+            .eq("vehicle_id", vehicle_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Kendaraan tidak ditemukan"
+            )
+
+        return {
+            "status": "success",
+            "data": response.data[0]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal mengambil data kendaraan: {e}"
+        )
+
+
+@app.post("/vehicle", status_code=status.HTTP_201_CREATED)
+@app.post("/vehicles", status_code=status.HTTP_201_CREATED)
+async def create_vehicle(
+    vehicle: VehicleCreate,
+    auth_context: tuple[Client, str] = Depends(require_auth),
+):
+    supabase, _ = auth_context
+
+    try:
+        payload = vehicle.model_dump()
+        response = (
+            supabase
+            .table("vehicles")
+            .insert(payload)
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Gagal menambahkan data kendaraan"
+            )
+
+        return {
+            "status": "success",
+            "message": "Kendaraan berhasil ditambahkan",
+            "data": response.data[0]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+
+@app.put("/vehicle/{vehicle_id}")
+@app.put("/vehicles/{vehicle_id}")
+@app.patch("/vehicle/{vehicle_id}")
+@app.patch("/vehicles/{vehicle_id}")
+async def update_vehicle(
+    vehicle_id: int,
+    vehicle: VehicleUpdate,
+    auth_context: tuple[Client, str] = Depends(require_auth),
+):
+    supabase, _ = auth_context
+
+    try:
+        existing = (
+            supabase
+            .table("vehicles")
+            .select("vehicle_id")
+            .eq("vehicle_id", vehicle_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not existing.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Kendaraan tidak ditemukan"
+            )
+
+        update_data = vehicle.model_dump(exclude_unset=True)
+        if not update_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tidak ada data yang diubah"
+            )
+
+        response = (
+            supabase
+            .table("vehicles")
+            .update(update_data)
+            .eq("vehicle_id", vehicle_id)
+            .execute()
+        )
+
+        return {
+            "status": "success",
+            "message": "Data kendaraan berhasil diperbarui",
+            "data": response.data[0] if response.data else update_data
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+
+@app.delete("/vehicle/{vehicle_id}")
+@app.delete("/vehicles/{vehicle_id}")
+async def delete_vehicle(
+    vehicle_id: int,
+    auth_context: tuple[Client, str] = Depends(require_auth),
+):
+    supabase, _ = auth_context
+
+    try:
+        existing = (
+            supabase
+            .table("vehicles")
+            .select("vehicle_id")
+            .eq("vehicle_id", vehicle_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not existing.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Kendaraan tidak ditemukan"
+            )
+
+        photos_response = (
+            supabase
+            .table("vehicle_photos")
+            .select("photo_url")
+            .eq("vehicle_id", vehicle_id)
+            .execute()
+        )
+
+        if photos_response.data:
+            try:
+                s3 = get_r2_client()
+                bucket_name = get_r2_bucket_name()
+                for p in photos_response.data:
+                    url = p.get("photo_url")
+                    if url:
+                        key = extract_r2_object_key(url)
+                        s3.delete_object(Bucket=bucket_name, Key=key)
+            except Exception:
+                pass
+
+        supabase.table("vehicles").delete().eq("vehicle_id", vehicle_id).execute()
+
+        return {
+            "status": "success",
+            "message": "Kendaraan berhasil dihapus"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal menghapus kendaraan: {e}"
+        )
+
+
+@app.post("/vehicle/{vehicle_id}/photos", status_code=status.HTTP_201_CREATED)
+@app.post("/vehicles/{vehicle_id}/photos", status_code=status.HTTP_201_CREATED)
+async def upload_vehicle_photo(
+    vehicle_id: int,
+    file: UploadFile = File(..., description="File gambar kendaraan"),
+    photo_type: str = Form(default="Other", description="Tipe foto (Exterior, Interior, Other)"),
+    auth_context: tuple[Client, str] = Depends(require_auth),
+):
+    supabase, _ = auth_context
+
+    valid_types = {"Exterior", "Interior", "Other"}
+    matched_type = None
+    for t in valid_types:
+        if t.lower() == photo_type.strip().lower():
+            matched_type = t
+            break
+
+    if not matched_type:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="photo_type harus salah satu dari: Exterior, Interior, Other"
+        )
+
+    existing = (
+        supabase
+        .table("vehicles")
+        .select("vehicle_id")
+        .eq("vehicle_id", vehicle_id)
+        .limit(1)
+        .execute()
+    )
+
+    if not existing.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Kendaraan tidak ditemukan"
+        )
+
+    content_type = file.content_type or ""
+    filename_orig = file.filename or ""
+    ext = os.path.splitext(filename_orig)[1].lower()
+    allowed_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"}
+
+    if not content_type.startswith("image/") and ext not in allowed_exts:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File harus berupa gambar (JPEG, PNG, WEBP, GIF, HEIC)"
+        )
+
+    if ext not in allowed_exts:
+        ext = ".jpg"
+
+    s3 = get_r2_client()
+    bucket_name = get_r2_bucket_name()
+    unique_filename = f"{uuid.uuid4().hex}{ext}"
+    object_key = f"vehicles/{vehicle_id}/{unique_filename}"
+
+    try:
+        s3.upload_fileobj(
+            file.file,
+            bucket_name,
+            object_key,
+            ExtraArgs={"ContentType": content_type if content_type.startswith("image/") else "image/jpeg"}
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal mengunggah foto ke Cloudflare R2: {e}"
+        )
+
+    photo_url = build_r2_public_url(object_key)
+
+    try:
+        insert_response = (
+            supabase
+            .table("vehicle_photos")
+            .insert({
+                "vehicle_id": vehicle_id,
+                "photo_url": photo_url,
+                "photo_type": matched_type
+            })
+            .execute()
+        )
+
+        created_data = insert_response.data[0] if insert_response.data else {
+            "vehicle_id": vehicle_id,
+            "photo_url": photo_url,
+            "photo_type": matched_type
+        }
+
+        return {
+            "status": "success",
+            "message": "Foto kendaraan berhasil diunggah",
+            "data": created_data
+        }
+
+    except Exception as e:
+        try:
+            s3.delete_object(Bucket=bucket_name, Key=object_key)
+        except Exception:
+            pass
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Gagal menyimpan data foto kendaraan: {e}"
+        )
+
+
+@app.delete("/vehicle/{vehicle_id}/photos/{photo_id}")
+@app.delete("/vehicles/{vehicle_id}/photos/{photo_id}")
+async def delete_vehicle_photo(
+    vehicle_id: int,
+    photo_id: int,
+    auth_context: tuple[Client, str] = Depends(require_auth),
+):
+    supabase, _ = auth_context
+
+    photo_response = (
+        supabase
+        .table("vehicle_photos")
+        .select("photo_id, photo_url")
+        .eq("vehicle_id", vehicle_id)
+        .eq("photo_id", photo_id)
+        .limit(1)
+        .execute()
+    )
+
+    if not photo_response.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Foto kendaraan tidak ditemukan"
+        )
+
+    photo_data = photo_response.data[0]
+    photo_url = photo_data.get("photo_url")
+
+    if photo_url:
+        try:
+            s3 = get_r2_client()
+            bucket_name = get_r2_bucket_name()
+            object_key = extract_r2_object_key(photo_url)
+            s3.delete_object(Bucket=bucket_name, Key=object_key)
+        except Exception:
+            pass
+
+    supabase.table("vehicle_photos").delete().eq("photo_id", photo_id).execute()
+
+    return {
+        "status": "success",
+        "message": "Foto kendaraan berhasil dihapus"
+    }
 
 
 @app.get("/")
