@@ -12,6 +12,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pywrangler>=0.0.2",
     "workers-py",
-    "workers-runtime-sdk"
+    "workers-runtime-sdk",
 ]

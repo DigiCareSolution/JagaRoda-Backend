@@ -15,3 +15,8 @@ Before you begin, ensure you have the following:
 1. Node.js installed (for the `wrangler` CLI).
 2. Python 3.12+ installed.
 ---
+
+## Basic debug command
+python -m uv run pywrangler dev
+
+---
