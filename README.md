@@ -10,6 +10,7 @@ JagaRoda API is a serverless backend service built with **FastAPI** deployed on 
 - **Deployment Platform:** [Vercel](https://vercel.com/) (Serverless Functions via `@vercel/python`)
 - **Serverless Entrypoint:** `api/index.py` via `vercel.json` rewrites
 - **Database & Auth:** [Supabase](https://supabase.com/) (PostgreSQL & Supabase GoTrue Auth)
+- **Object Storage:** [Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/) (S3-compatible storage for vehicle photos)
 - **CORS:** Enabled for cross-origin browser & mobile client access
 
 ---
@@ -67,12 +68,23 @@ cp .env.example .env
 Set the following variables:
 
 ```ini
+# Supabase Configuration
 SUPABASE_URL="https://your-project-ref.supabase.co"
 SUPABASE_KEY="your-supabase-service-role-secret-key"
 PORT=8000
+
+# Cloudflare R2 Storage Configuration
+R2_ACCOUNT_ID="your-cloudflare-account-id"
+R2_ACCESS_KEY_ID="your-r2-access-key-id"
+R2_SECRET_ACCESS_KEY="your-r2-secret-access-key"
+R2_BUCKET_NAME="jagaroda-images"
+R2_PUBLIC_URL="https://pub-your-id.r2.dev"
+# R2_ENDPOINT_URL="https://your-account-id.r2.cloudflarestorage.com"
 ```
 
-> **Note:** `SUPABASE_KEY` must be the Supabase **Service Role Key** (secret) to perform administrative operations such as `supabase.auth.admin.create_user` and `delete_user`.
+> **Note:**
+> - `SUPABASE_KEY` must be the Supabase **Service Role Key** (secret) to perform administrative operations such as `supabase.auth.admin.create_user` and `delete_user`.
+> - `R2_BUCKET_NAME` defaults to `jagaroda-images` if omitted. `R2_PUBLIC_URL` is recommended for serving public URLs (e.g. from an R2 public domain or custom CDN).
 
 ---
 
@@ -358,6 +370,232 @@ Creates a new `Staff` user account in Supabase Auth and inserts the correspondin
 
 ---
 
+### 4. Vehicle Management
+
+#### `GET /vehicle` (alias: `GET /vehicles`)
+Fetches a paginated list of vehicles with associated photos, newest first.
+
+- **Access Level:** Public
+- **Query Parameters:**
+  | Parameter | Type | Default | Description |
+  |---|---|---|---|
+  | `limit` | `int` | `50` | Maximum number of records (1-100) |
+  | `offset` | `int` | `0` | Number of records to skip |
+  | `status` | `string` | `null` | Filter by status (`Available`, `Rented`, `In Maintenance`) |
+  | `search` | `string` | `null` | Search plat nomor, merk, or tipe |
+
+- **Response `200 OK`:**
+  ```json
+  {
+    "status": "success",
+    "data": [
+      {
+        "vehicle_id": 1,
+        "plat_nomor": "B 1234 ABC",
+        "merk": "Toyota",
+        "tipe": "Avanza 1.3 G",
+        "tahun": 2023,
+        "warna": "Hitam",
+        "nomor_stnk": "STNK-123456",
+        "tarif_per_hari": 350000.0,
+        "status": "Available",
+        "deskripsi": "Kondisi prima, servis rutin",
+        "created_at": "2026-11-19T08:00:00+00:00",
+        "vehicle_photos": [
+          {
+            "photo_id": 10,
+            "vehicle_id": 1,
+            "photo_url": "https://pub-id.r2.dev/vehicles/1/abc123.jpg",
+            "photo_type": "Exterior",
+            "created_at": "2026-11-19T08:05:00+00:00"
+          }
+        ]
+      }
+    ]
+  }
+  ```
+
+#### `GET /vehicle/{vehicle_id}` (alias: `GET /vehicles/{vehicle_id}`)
+Fetches complete vehicle details by `vehicle_id` including its photos.
+
+- **Access Level:** Public
+- **Response `200 OK`:**
+  ```json
+  {
+    "status": "success",
+    "data": {
+      "vehicle_id": 1,
+      "plat_nomor": "B 1234 ABC",
+      "merk": "Toyota",
+      "tipe": "Avanza 1.3 G",
+      "tahun": 2023,
+      "warna": "Hitam",
+      "nomor_stnk": "STNK-123456",
+      "tarif_per_hari": 350000.0,
+      "status": "Available",
+      "deskripsi": "Kondisi prima, servis rutin",
+      "created_at": "2026-11-19T08:00:00+00:00",
+      "vehicle_photos": []
+    }
+  }
+  ```
+
+- **Response `404 Not Found`:**
+  ```json
+  {
+    "detail": "Kendaraan tidak ditemukan"
+  }
+  ```
+
+#### `POST /vehicle` (alias: `POST /vehicles`)
+Creates a new vehicle record.
+
+- **Access Level:** Authenticated users (Staff / Admin)
+- **Headers:**
+  ```http
+  Authorization: Bearer <access_token>
+  Content-Type: application/json
+  ```
+
+- **Request Body:**
+  ```json
+  {
+    "plat_nomor": "B 1234 ABC",
+    "merk": "Toyota",
+    "tipe": "Avanza 1.3 G",
+    "tahun": 2023,
+    "warna": "Hitam",
+    "nomor_stnk": "STNK-123456",
+    "tarif_per_hari": 350000.0,
+    "status": "Available",
+    "deskripsi": "Kondisi mulus dan terawat"
+  }
+  ```
+
+- **Field Constraints:**
+  - `plat_nomor`: Required (3-20 characters, automatically uppercase & trimmed). Unique.
+  - `merk`: Required (1-50 characters).
+  - `tipe`: Required (1-50 characters).
+  - `tahun`: Optional integer (1900-2100).
+  - `warna`: Optional string (max 30 characters).
+  - `nomor_stnk`: Optional string (max 50 characters).
+  - `tarif_per_hari`: Optional float (>= 0, default: 0.0).
+  - `status`: Optional (`Available`, `Rented`, `In Maintenance`, default: `Available`).
+  - `deskripsi`: Optional text.
+
+- **Response `201 Created`:**
+  ```json
+  {
+    "status": "success",
+    "message": "Kendaraan berhasil ditambahkan",
+    "data": {
+      "vehicle_id": 1,
+      "plat_nomor": "B 1234 ABC",
+      "merk": "Toyota",
+      "tipe": "Avanza 1.3 G",
+      "tahun": 2023,
+      "warna": "Hitam",
+      "nomor_stnk": "STNK-123456",
+      "tarif_per_hari": 350000.0,
+      "status": "Available",
+      "deskripsi": "Kondisi mulus dan terawat",
+      "created_at": "2026-11-19T08:00:00+00:00"
+    }
+  }
+  ```
+
+#### `PUT /vehicle/{vehicle_id}` (or `PATCH /vehicle/{vehicle_id}`)
+Updates vehicle attributes.
+
+- **Access Level:** Authenticated users (Staff / Admin)
+- **Headers:**
+  ```http
+  Authorization: Bearer <access_token>
+  Content-Type: application/json
+  ```
+
+- **Request Body:** (Pass only fields to update)
+  ```json
+  {
+    "status": "Rented",
+    "tarif_per_hari": 380000.0
+  }
+  ```
+
+- **Response `200 OK`:**
+  ```json
+  {
+    "status": "success",
+    "message": "Data kendaraan berhasil diperbarui",
+    "data": { ... }
+  }
+  ```
+
+#### `DELETE /vehicle/{vehicle_id}` (alias: `DELETE /vehicles/{vehicle_id}`)
+Deletes a vehicle and automatically deletes all associated photos from Cloudflare R2 and database.
+
+- **Access Level:** Authenticated users (Staff / Admin)
+- **Headers:**
+  ```http
+  Authorization: Bearer <access_token>
+  ```
+
+- **Response `200 OK`:**
+  ```json
+  {
+    "status": "success",
+    "message": "Kendaraan berhasil dihapus"
+  }
+  ```
+
+#### `POST /vehicle/{vehicle_id}/photos` (alias: `POST /vehicles/{vehicle_id}/photos`)
+Uploads a vehicle photo to Cloudflare R2 bucket (`jagaroda-images`) and saves metadata to `public.vehicle_photos`.
+
+- **Access Level:** Authenticated users (Staff / Admin)
+- **Headers:**
+  ```http
+  Authorization: Bearer <access_token>
+  Content-Type: multipart/form-data
+  ```
+
+- **Form Fields:**
+  - `file`: Image file (`image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`).
+  - `photo_type`: Optional string (`Exterior`, `Interior`, `Other`, default: `Other`).
+
+- **Response `201 Created`:**
+  ```json
+  {
+    "status": "success",
+    "message": "Foto kendaraan berhasil diunggah",
+    "data": {
+      "photo_id": 1,
+      "vehicle_id": 1,
+      "photo_url": "https://pub-your-id.r2.dev/vehicles/1/6a1f8e91e6b94c39864293f7e53f14ad.jpg",
+      "photo_type": "Exterior",
+      "created_at": "2026-11-19T08:15:00+00:00"
+    }
+  }
+  ```
+
+#### `DELETE /vehicle/{vehicle_id}/photos/{photo_id}`
+Deletes a specific photo from Cloudflare R2 and removes the database record.
+
+- **Access Level:** Authenticated users (Staff / Admin)
+- **Headers:**
+  ```http
+  Authorization: Bearer <access_token>
+  ```
+
+- **Response `200 OK`:**
+  ```json
+  {
+    "status": "success",
+    "message": "Foto kendaraan berhasil dihapus"
+  }
+  ```
+
+---
+
 ## Deployment to Vercel
 
 ### Option A: Via Vercel Web Dashboard (Recommended)
@@ -374,6 +612,11 @@ Creates a new `Staff` user account in Supabase Auth and inserts the correspondin
 5. In the **Environment Variables** section, add:
    - `SUPABASE_URL` = `https://your-project-ref.supabase.co`
    - `SUPABASE_KEY` = `your-supabase-service-role-key`
+   - `R2_ACCOUNT_ID` = `your-cloudflare-account-id`
+   - `R2_ACCESS_KEY_ID` = `your-r2-access-key-id`
+   - `R2_SECRET_ACCESS_KEY` = `your-r2-secret-access-key`
+   - `R2_BUCKET_NAME` = `jagaroda-images`
+   - `R2_PUBLIC_URL` = `https://pub-your-id.r2.dev` (optional)
 6. Click **Deploy**. Vercel will install dependencies from `requirements.txt` and deploy your FastAPI endpoints.
 
 ---
